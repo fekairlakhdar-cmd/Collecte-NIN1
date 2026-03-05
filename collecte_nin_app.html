@@ -158,6 +158,7 @@ body{font-family:'Cairo',sans-serif;background:var(--bg);color:var(--text);min-h
     <button class="btn btn-blue"  onclick="document.getElementById('fileInput').click()">📂 ملف</button>
     <button class="btn" style="background:#1a73e8;color:#fff" onclick="openDriveModal()">🐙 GitHub</button>
     <button class="btn btn-green" onclick="saveFile()">💾 حفظ</button>
+    <button class="btn" style="background:#238636;color:#fff" onclick="openUploadGithubModal()">⬆️ رفع</button>
     <button class="btn btn-wa"    id="btnWa" onclick="shareWhatsApp()">📤 واتساب</button>
   </div>
 </div>
@@ -237,6 +238,37 @@ body{font-family:'Cairo',sans-serif;background:var(--bg);color:var(--text);min-h
     <div class="modal-foot">
       <button class="btn btn-blue" style="flex:2" onclick="saveRecord()">💾 حفظ التعديلات</button>
       <button class="btn" style="background:var(--surface2);color:var(--text2)" onclick="closeModal()">إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<!-- GitHub Upload Modal -->
+<div class="overlay" id="uploadGithubModal">
+  <div class="modal">
+    <div class="handle"></div>
+    <div class="modal-head">
+      <span class="modal-title">⬆️ رفع على GitHub</span>
+      <button class="close-btn" onclick="closeUploadGithubModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="background:rgba(255,193,7,.08);border:1px solid rgba(255,193,7,.3);border-radius:9px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#fbbf24;line-height:1.8">
+        ⚠️ تأكد أن لا أحد آخر يرفع في نفس الوقت لتجنب فقدان التعديلات
+      </div>
+      <div class="fgroup">
+        <label class="flabel">🔑 GitHub Token</label>
+        <input class="finput" id="githubTokenInput" type="password" placeholder="ghp_xxxxxxxxxxxx">
+        <div style="font-size:11px;color:var(--text2);margin-top:5px">يُحفظ تلقائياً على جهازك — لا يُرسل لأحد</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:9px;padding:10px 12px;margin-top:8px;font-size:12px;color:var(--text2);line-height:1.8">
+        📌 للحصول على Token:<br>
+        GitHub ← Settings ← Developer settings ← Personal access tokens ← Generate new token<br>
+        <span style="color:#4d9ef7">✅ فعّل صلاحية: repo</span>
+      </div>
+      <div id="uploadGithubStatus" style="display:none;border-radius:9px;padding:10px 12px;font-size:12px;font-weight:700;text-align:center;margin-top:10px"></div>
+    </div>
+    <div class="modal-foot" style="flex-direction:column;gap:8px">
+      <button class="btn" style="width:100%;font-size:14px;background:#238636;color:#fff" onclick="uploadToGitHub()">⬆️ رفع الملف الآن</button>
+      <button class="btn" style="width:100%;background:var(--surface2);color:var(--text2)" onclick="closeUploadGithubModal()">إلغاء</button>
     </div>
   </div>
 </div>
@@ -383,6 +415,7 @@ async function fetchFromGitHub() {
 }
 
 
+// ══ FILE LOAD ══════════════════════════════════════════════════
 async function parseXlsxBuffer(buffer) {
   return new Promise((resolve, reject) => {
     setTimeout(async () => {
@@ -417,7 +450,83 @@ async function parseXlsxBuffer(buffer) {
   });
 }
 
-// ══ FILE LOAD ══════════════════════════════════════════════════
+// ══ GITHUB UPLOAD ══════════════════════════════════════════════
+const GITHUB_OWNER = 'fekairlakhdar-cmd';
+const GITHUB_REPO  = 'collecte-nin1';
+const GITHUB_FILE  = 'Collecte_NIN.xlsx';
+const GITHUB_BRANCH= 'main';
+
+function openUploadGithubModal() {
+  if (!sheetNames.length) { toast('⚠️ لا توجد بيانات للرفع','err'); return; }
+  // استرجاع التوكن المحفوظ
+  idbGet('meta','githubToken').then(t => {
+    if (t) document.getElementById('githubTokenInput').value = t;
+  }).catch(()=>{});
+  document.getElementById('uploadGithubStatus').style.display = 'none';
+  document.getElementById('uploadGithubModal').classList.add('open');
+}
+function closeUploadGithubModal() { document.getElementById('uploadGithubModal').classList.remove('open'); }
+
+async function uploadToGitHub() {
+  const token = document.getElementById('githubTokenInput').value.trim();
+  if (!token) { toast('⚠️ أدخل GitHub Token أولاً','err'); return; }
+
+  const status = document.getElementById('uploadGithubStatus');
+  const setStatus = (msg, color) => {
+    status.style.display = 'block';
+    status.style.background = `rgba(${color},.1)`;
+    status.style.border = `1px solid rgba(${color},.3)`;
+    status.style.color = status.style.borderColor;
+    status.textContent = msg;
+  };
+  setStatus('⏳ جارٍ تحضير الملف...', '77,158,247');
+
+  try {
+    // حفظ التوكن محلياً
+    await idbPut('meta','githubToken', token);
+
+    // بناء ملف Excel من البيانات الحالية
+    const wb = XLSX.utils.book_new();
+    const hdrs = ['Commune',...(originalHeaders[sheetNames[0]]||FIELDS.map(f=>f.key)).filter(h=>h!=='Commune')];
+    const aoa  = [hdrs];
+    sheetNames.forEach(sn => sheets[sn].forEach(r => aoa.push(hdrs.map(h => h==='Commune'?sn:(r[h]!==undefined?r[h]:'')))));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'ListContrats');
+    const xlsxData = XLSX.write(wb, {bookType:'xlsx', type:'base64'});
+
+    setStatus('⏳ جارٍ الرفع على GitHub...', '77,158,247');
+
+    // الحصول على SHA الملف الحالي
+    const apiBase = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE}`;
+    const headers = { 'Authorization': 'token ' + token, 'Content-Type': 'application/json' };
+
+    let sha = '';
+    try {
+      const info = await fetch(apiBase, {headers});
+      if (info.ok) { const j = await info.json(); sha = j.sha; }
+    } catch(e) {}
+
+    // رفع الملف
+    const now = new Date();
+    const msg = `تحديث البيانات ${pad(now.getDate())}-${pad(now.getMonth()+1)}-${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    const body = { message: msg, content: xlsxData, branch: GITHUB_BRANCH };
+    if (sha) body.sha = sha;
+
+    const res = await fetch(apiBase, { method:'PUT', headers, body: JSON.stringify(body) });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.message || 'فشل الرفع');
+    }
+
+    setStatus('✅ تم الرفع بنجاح! الفريق يمكنه التحديث الآن 🎉', '22,163,74');
+    toast('✅ تم رفع الملف على GitHub 🐙','ok');
+    setTimeout(() => closeUploadGithubModal(), 2000);
+
+  } catch(e) {
+    setStatus('❌ ' + (e.message||'تأكد من صحة التوكن والاتصال'), '220,38,38');
+  }
+}
+
+
 function onFileLoad(e) {
   const file = e.target.files[0]; if (!file) return;
   originalFileName = file.name;
